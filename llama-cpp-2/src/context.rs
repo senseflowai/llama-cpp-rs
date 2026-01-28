@@ -11,7 +11,10 @@ use crate::timing::LlamaTimings;
 use crate::token::data::LlamaTokenData;
 use crate::token::data_array::LlamaTokenDataArray;
 use crate::token::LlamaToken;
-use crate::{DecodeError, EmbeddingsError, EncodeError, LlamaLoraAdapterRemoveError, LlamaLoraAdapterSetError, MemStateError};
+use crate::{
+    DecodeError, EmbeddingsError, EncodeError, LlamaLoraAdapterRemoveError,
+    LlamaLoraAdapterSetError,
+};
 
 pub mod kv_cache;
 pub mod params;
@@ -70,39 +73,18 @@ impl<'model> LlamaContext<'model> {
     /// Gets the size of the context.
     #[must_use]
     pub fn state_seq_size(&self, i: i32) -> usize {
-        unsafe {
-            llama_cpp_sys_2::llama_state_seq_get_size(self.context.as_ptr(), i)
-        }
+        unsafe { llama_cpp_sys_2::llama_state_seq_get_size(self.context.as_ptr(), i) }
     }
 
     ///Get mem state
-    pub fn state_seq_get_data(&self, size: usize, i: i32) -> Result<Vec<u8>, MemStateError> {
-        let mut data = vec![0u8; size];
-        let result =
-        unsafe {
-            llama_cpp_sys_2::llama_state_seq_get_data(self.context.as_ptr(), data.as_mut_ptr(), size, i)
-        };
-
-        match NonZeroUsize::new(result) {
-            None => {
-                Ok(data)
-            }
-            Some(error) => Err(MemStateError::from(error)),
-        }
+    pub fn state_seq_get_data(&self, dest: *mut u8, size: usize, i: i32) -> usize {
+        unsafe { llama_cpp_sys_2::llama_state_seq_get_data(self.context.as_ptr(), dest, size, i) }
     }
 
     ///Set mem state
-    pub fn state_seq_set_data(&self, data: &Vec<u8>, i: i32) -> Result<(), MemStateError> {
-        let result =
+    pub fn state_seq_set_data(&self, src: &[u8], size: usize, i: i32) -> usize {
         unsafe {
-            llama_cpp_sys_2::llama_state_seq_set_data(self.context.as_ptr(), data.as_ptr(), data.len(), i)
-        };
-
-        match NonZeroUsize::new(result) {
-            None => {
-                Ok(())
-            }
-            Some(error) => Err(MemStateError::from(error)),
+            llama_cpp_sys_2::llama_state_seq_set_data(self.context.as_ptr(), src.as_ptr(), size, i)
         }
     }
 

@@ -106,13 +106,6 @@ pub enum MetaValError {
     NegativeReturn(i32),
 }
 
-#[derive(Debug, Eq, PartialEq, thiserror::Error)]
-pub enum MemStateError {
-    /// Got return value:
-    #[error("Got return value: {0}")]
-    Unknown(usize),
-}
-
 /// Failed to Load context
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum LlamaContextLoadError {
@@ -187,14 +180,6 @@ impl From<NonZeroI32> for DecodeError {
             1 => DecodeError::NoKvCacheSlot,
             -1 => DecodeError::NTokensZero,
             i => DecodeError::Unknown(i),
-        }
-    }
-}
-
-impl From<NonZeroUsize> for MemStateError {
-    fn from(value: NonZeroUsize) -> Self {
-        match value.get() {
-            i => MemStateError::Unknown(i),
         }
     }
 }
