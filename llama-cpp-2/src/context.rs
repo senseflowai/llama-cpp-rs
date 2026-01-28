@@ -1,7 +1,7 @@
 //! Safe wrapper around `llama_context`.
 
 use std::fmt::{Debug, Formatter};
-use std::num::NonZeroI32;
+use std::num::{NonZeroI32, NonZeroUsize};
 use std::ptr::NonNull;
 use std::slice;
 
@@ -11,10 +11,7 @@ use crate::timing::LlamaTimings;
 use crate::token::data::LlamaTokenData;
 use crate::token::data_array::LlamaTokenDataArray;
 use crate::token::LlamaToken;
-use crate::{
-    DecodeError, EmbeddingsError, EncodeError, LlamaLoraAdapterRemoveError,
-    LlamaLoraAdapterSetError,
-};
+use crate::{DecodeError, EmbeddingsError, EncodeError, LlamaLoraAdapterRemoveError, LlamaLoraAdapterSetError, MemStateError};
 
 pub mod kv_cache;
 pub mod params;
@@ -68,6 +65,45 @@ impl<'model> LlamaContext<'model> {
     #[must_use]
     pub fn n_ctx(&self) -> u32 {
         unsafe { llama_cpp_sys_2::llama_n_ctx(self.context.as_ptr()) }
+    }
+
+    /// Gets the size of the context.
+    #[must_use]
+    pub fn state_seq_size(&self, i: i32) -> usize {
+        unsafe {
+            llama_cpp_sys_2::llama_state_seq_get_size(self.context.as_ptr(), i)
+        }
+    }
+
+    ///Get mem state
+    pub fn state_seq_get_data(&self, size: usize, i: i32) -> Result<Vec<u8>, MemStateError> {
+        let mut data = vec![0u8; size];
+        let result =
+        unsafe {
+            llama_cpp_sys_2::llama_state_seq_get_data(self.context.as_ptr(), data.as_mut_ptr(), size, i)
+        };
+
+        match NonZeroUsize::new(result) {
+            None => {
+                Ok(data)
+            }
+            Some(error) => Err(MemStateError::from(error)),
+        }
+    }
+
+    ///Set mem state
+    pub fn state_seq_set_data(&self, data: &Vec<u8>, i: i32) -> Result<(), MemStateError> {
+        let result =
+        unsafe {
+            llama_cpp_sys_2::llama_state_seq_set_data(self.context.as_ptr(), data.as_ptr(), data.len(), i)
+        };
+
+        match NonZeroUsize::new(result) {
+            None => {
+                Ok(())
+            }
+            Some(error) => Err(MemStateError::from(error)),
+        }
     }
 
     /// Decodes the batch.

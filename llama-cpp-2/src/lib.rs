@@ -15,7 +15,7 @@
 //! - `sampler` adds the [`context::sample::sampler`] struct for a more rusty way of sampling.
 use std::ffi::{c_char, NulError};
 use std::fmt::Debug;
-use std::num::NonZeroI32;
+use std::num::{NonZeroI32, NonZeroUsize};
 
 use crate::llama_batch::BatchAddError;
 use std::os::raw::c_int;
@@ -106,6 +106,13 @@ pub enum MetaValError {
     NegativeReturn(i32),
 }
 
+#[derive(Debug, Eq, PartialEq, thiserror::Error)]
+pub enum MemStateError {
+    /// Got return value:
+    #[error("Got return value: {0}")]
+    Unknown(usize),
+}
+
 /// Failed to Load context
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum LlamaContextLoadError {
@@ -180,6 +187,14 @@ impl From<NonZeroI32> for DecodeError {
             1 => DecodeError::NoKvCacheSlot,
             -1 => DecodeError::NTokensZero,
             i => DecodeError::Unknown(i),
+        }
+    }
+}
+
+impl From<NonZeroUsize> for MemStateError {
+    fn from(value: NonZeroUsize) -> Self {
+        match value.get() {
+            i => MemStateError::Unknown(i),
         }
     }
 }
