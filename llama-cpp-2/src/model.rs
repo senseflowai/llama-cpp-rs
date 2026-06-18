@@ -3,7 +3,8 @@ use std::ffi::{c_char, CStr, CString};
 use std::num::NonZeroU16;
 use std::os::raw::c_int;
 use std::path::Path;
-use std::ptr::NonNull;
+use std::ptr::{self, NonNull};
+use std::slice;
 use std::str::Utf8Error;
 
 use crate::context::params::LlamaContextParams;
@@ -215,7 +216,12 @@ impl LlamaModel {
     ) -> Result<String, TokenToStringError> {
         // TODO lsptrip None is acutally not quite the origignal behavior of this function,
         let mut decoder = encoding_rs::UTF_8.new_decoder();
-        Ok(self.token_to_piece(token, &mut decoder ,matches!(special, Special::Tokenize), None)?)
+        self.token_to_piece(
+            token,
+            &mut decoder,
+            matches!(special, Special::Tokenize),
+            None,
+        )
     }
 
     /// Convert single token to bytes.
@@ -364,7 +370,7 @@ impl LlamaModel {
     /// the llama.cpp token decoding functionality without any special logic or filtering.
     ///
     /// Decoding raw string requires using an decoder, tokens from language models may not always map
-    /// to full charakters depending on the encoding so stateful decoding is required, otherwise partial strings may be lost!
+    /// to full characters depending on the encoding so stateful decoding is required, otherwise partial strings may be lost!
     /// Invalid characters are mapped to REPLACEMENT CHARACTER making the method safe to use even if the model inherently produces
     /// garbage.
     ///
@@ -397,16 +403,17 @@ impl LlamaModel {
         let mut output_piece = String::with_capacity(bytes.len());
         // _result only tells if there is nothing more in the input, or if the output was full
         // but further decoding will happen on the next interation anyway
-        let (_result, _somesize, _truthy) = decoder.decode_to_string(&bytes, &mut output_piece, false);
+        let (_result, _somesize, _truthy) =
+            decoder.decode_to_string(&bytes, &mut output_piece, false);
         Ok(output_piece)
     }
 
     /// Raw token decoding to bytes, use if you want to handle the decoding model output yourself
-    /// 
+    ///
     /// Convert a token to bytes using the underlying llama.cpp `llama_token_to_piece` function. This is mostly
     /// a thin wrapper around `llama_token_to_piece` function, that handles rust <-> c type conversions while
     /// letting the caller handle errors. For a safer inteface returing rust strings directly use `token_to_piece` instead!
-    /// 
+    ///
     /// # Errors
     ///
     /// - if the token type is unknown
@@ -594,6 +601,14 @@ impl LlamaModel {
     /// Returns whether the model is a recurrent network (Mamba, RWKV, etc)
     pub fn is_recurrent(&self) -> bool {
         unsafe { llama_cpp_sys_2::llama_model_is_recurrent(self.model.as_ptr()) }
+    }
+
+    /// Returns whether the model is a hybrid network (Jamba, Granite, Qwen3xx, etc)
+    ///
+    /// Hybrid models have both attention layers and recurrent/SSM layers.
+    /// They require special handling for state checkpointing.
+    pub fn is_hybrid(&self) -> bool {
+        unsafe { llama_cpp_sys_2::llama_model_is_hybrid(self.model.as_ptr()) }
     }
 
     /// Returns the number of layers within the model.
@@ -851,6 +866,10 @@ impl LlamaModel {
             )
         };
 
+        if res < 0 {
+            return Err(ApplyChatTemplateError::FfiError(res));
+        }
+
         if res > buff.len().try_into().expect("Buffer size exceeds i32::MAX") {
             buff.resize(res.try_into().expect("res is negative"), 0);
 
@@ -864,6 +883,9 @@ impl LlamaModel {
                     buff.len().try_into().expect("Buffer size exceeds i32::MAX"),
                 )
             };
+            if res < 0 {
+                return Err(ApplyChatTemplateError::FfiError(res));
+            }
             assert_eq!(Ok(res), buff.len().try_into());
         }
         buff.truncate(res.try_into().expect("res is negative"));

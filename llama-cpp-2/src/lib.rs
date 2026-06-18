@@ -8,12 +8,13 @@
 //! # Examples
 //!
 //! - [simple](https://github.com/utilityai/llama-cpp-rs/tree/main/examples/simple)
+//! - [tools](https://github.com/utilityai/llama-cpp-rs/tree/main/examples/tools)
 //!
 //! # Feature Flags
 //!
 //! - `cuda` enables CUDA gpu support.
 //! - `sampler` adds the [`context::sample::sampler`] struct for a more rusty way of sampling.
-use std::ffi::{c_char, NulError};
+use std::ffi::{c_char, CStr, CString, NulError};
 use std::fmt::Debug;
 use std::num::{NonZeroI32, NonZeroUsize};
 
@@ -23,8 +24,11 @@ use std::path::PathBuf;
 use std::string::FromUtf8Error;
 
 pub mod context;
+pub mod gguf;
 pub mod llama_backend;
 pub mod llama_batch;
+#[cfg(feature = "llguidance")]
+pub(crate) mod llguidance_sampler;
 mod log;
 pub mod model;
 #[cfg(feature = "mtmd")]
@@ -33,6 +37,13 @@ pub mod sampling;
 pub mod timing;
 pub mod token;
 pub mod token_type;
+
+pub use crate::context::session::LlamaStateSeqFlags;
+
+#[cfg(feature = "common")]
+pub(crate) fn status_is_ok(status: llama_cpp_sys_2::llama_rs_status) -> bool {
+    status == llama_cpp_sys_2::LLAMA_RS_STATUS_OK
+}
 
 /// A failable result from a llama.cpp function.
 pub type Result<T> = std::result::Result<T, LlamaCppError>;
@@ -72,6 +83,14 @@ pub enum LlamaCppError {
     /// Max devices exceeded
     #[error("Max devices exceeded. Max devices is {0}")]
     MaxDevicesExceeded(usize),
+    /// Failed to convert JSON schema to grammar.
+    #[cfg(feature = "common")]
+    #[error("JsonSchemaToGrammarError: {0}")]
+    JsonSchemaToGrammarError(String),
+    /// There was an error fitting model parameters to available memory.
+    #[cfg(feature = "common")]
+    #[error("{0}")]
+    FitError(#[from] crate::model::params::FitError),
 }
 
 /// There was an error while getting the chat template from a model.
@@ -289,6 +308,55 @@ pub fn mlock_supported() -> bool {
     unsafe { llama_cpp_sys_2::llama_supports_mlock() }
 }
 
+/// Convert a JSON schema string into a llama.cpp grammar string.
+#[cfg(feature = "common")]
+pub fn json_schema_to_grammar(schema_json: &str) -> Result<String> {
+    let schema_cstr = CString::new(schema_json)
+        .map_err(|err| LlamaCppError::JsonSchemaToGrammarError(err.to_string()))?;
+    let mut out = std::ptr::null_mut();
+    let rc = unsafe {
+        llama_cpp_sys_2::llama_rs_json_schema_to_grammar(schema_cstr.as_ptr(), false, &mut out)
+    };
+
+    let result = {
+        if !status_is_ok(rc) || out.is_null() {
+            return Err(LlamaCppError::JsonSchemaToGrammarError(format!(
+                "ffi error {}",
+                rc
+            )));
+        }
+        let grammar_bytes = unsafe { CStr::from_ptr(out) }.to_bytes().to_vec();
+        let grammar = String::from_utf8(grammar_bytes)
+            .map_err(|err| LlamaCppError::JsonSchemaToGrammarError(err.to_string()))?;
+        Ok(grammar)
+    };
+
+    unsafe { llama_cpp_sys_2::llama_rs_string_free(out) };
+    result
+}
+
+#[cfg(all(test, feature = "common"))]
+mod tests {
+    use super::json_schema_to_grammar;
+
+    #[test]
+    fn json_schema_string_api_returns_grammar() {
+        let schema = r#"{
+            "type": "object",
+            "properties": {
+                "city": { "type": "string" },
+                "unit": { "enum": ["c", "f"] }
+            },
+            "required": ["city"]
+        }"#;
+
+        let grammar =
+            json_schema_to_grammar(schema).expect("string-based schema conversion should succeed");
+
+        assert!(grammar.contains("root ::="));
+    }
+}
+
 /// An error that can occur when converting a token to a string.
 #[derive(Debug, thiserror::Error, Clone)]
 #[non_exhaustive]
@@ -332,6 +400,20 @@ pub enum ApplyChatTemplateError {
     /// the string could not be converted to utf8.
     #[error("{0}")]
     FromUtf8Error(#[from] FromUtf8Error),
+    /// llama.cpp returned a null pointer for the template result.
+    #[error("null result from llama.cpp")]
+    NullResult,
+    /// llama.cpp returned an error code.
+    #[error("ffi error {0}")]
+    FfiError(i32),
+}
+
+/// Failed to accept a token in a sampler.
+#[derive(Debug, thiserror::Error)]
+pub enum SamplerAcceptError {
+    /// llama.cpp returned an error code.
+    #[error("ffi error {0}")]
+    FfiError(i32),
 }
 
 /// Get the time in microseconds according to ggml

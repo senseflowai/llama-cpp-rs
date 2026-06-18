@@ -63,6 +63,8 @@ impl From<llama_cpp_sys_2::mtmd_input_chunk_type> for MtmdInputChunkType {
 ///     print_timings: true,
 ///     n_threads: 4,
 ///     media_marker: CString::new(mtmd_default_marker()).unwrap(),
+///     image_min_tokens: -1,
+///     image_max_tokens: -1,
 /// };
 /// ```
 #[derive(Debug, Clone)]
@@ -75,6 +77,15 @@ pub struct MtmdContextParams {
     pub n_threads: i32,
     /// Media marker string used to identify media positions in text
     pub media_marker: CString,
+    /// Minimum number of tokens used to represent an image.
+    /// Controls the visual token budget lower bound. Use -1 for the model default.
+    /// Gemma 4 supported budgets: 70, 140, 280, 560, 1120.
+    pub image_min_tokens: i32,
+    /// Maximum number of tokens used to represent an image.
+    /// Controls the visual token budget upper bound. Use -1 for the model default.
+    /// Lower values reduce memory and compute at the cost of visual detail.
+    /// Gemma 4 supported budgets: 70, 140, 280, 560, 1120.
+    pub image_max_tokens: i32,
 }
 
 impl Default for MtmdContextParams {
@@ -91,12 +102,16 @@ impl From<&MtmdContextParams> for llama_cpp_sys_2::mtmd_context_params {
             print_timings,
             n_threads,
             media_marker,
+            image_min_tokens,
+            image_max_tokens,
         } = params;
 
         context.use_gpu = *use_gpu;
         context.print_timings = *print_timings;
         context.n_threads = *n_threads;
         context.media_marker = media_marker.as_ptr();
+        context.image_min_tokens = *image_min_tokens;
+        context.image_max_tokens = *image_max_tokens;
 
         context
     }
@@ -109,6 +124,8 @@ impl From<llama_cpp_sys_2::mtmd_context_params> for MtmdContextParams {
             print_timings: params.print_timings,
             n_threads: params.n_threads,
             media_marker: unsafe { CStr::from_ptr(params.media_marker) }.to_owned(),
+            image_min_tokens: params.image_min_tokens,
+            image_max_tokens: params.image_max_tokens,
         }
     }
 }
@@ -144,6 +161,10 @@ pub struct MtmdInputText {
 pub struct MtmdContext {
     pub(crate) context: NonNull<llama_cpp_sys_2::mtmd_context>,
 }
+
+// MtmdContext is thread safe
+unsafe impl Send for MtmdContext {}
+unsafe impl Sync for MtmdContext {}
 
 impl MtmdContext {
     /// Initialize MTMD context from a multimodal projection file.
@@ -186,7 +207,9 @@ impl MtmdContext {
     /// Check whether non-causal attention mask is needed before `llama_decode`.
     #[must_use]
     pub fn decode_use_non_causal(&self) -> bool {
-        unsafe { llama_cpp_sys_2::mtmd_decode_use_non_causal(self.context.as_ptr()) }
+        unsafe {
+            llama_cpp_sys_2::mtmd_decode_use_non_causal(self.context.as_ptr(), std::ptr::null())
+        }
     }
 
     /// Check whether the current model uses M-RoPE for `llama_decode`.
@@ -210,12 +233,18 @@ impl MtmdContext {
         unsafe { llama_cpp_sys_2::mtmd_support_audio(self.context.as_ptr()) }
     }
 
-    /// Get audio bitrate in Hz (e.g., 16000 for Whisper).
+    /// Get audio sample rate in Hz (e.g., 16000 for Whisper).
     /// Returns None if audio is not supported.
     #[must_use]
-    pub fn get_audio_bitrate(&self) -> Option<u32> {
+    pub fn get_audio_sample_rate(&self) -> Option<u32> {
         let rate = unsafe { llama_cpp_sys_2::mtmd_get_audio_sample_rate(self.context.as_ptr()) };
         (rate > 0).then_some(rate.unsigned_abs())
+    }
+
+    /// Backward-compatible alias for the audio sample rate getter.
+    #[must_use]
+    pub fn get_audio_bitrate(&self) -> Option<u32> {
+        self.get_audio_sample_rate()
     }
 
     /// Tokenize input text and bitmaps into chunks.
@@ -336,6 +365,10 @@ pub struct MtmdBitmap {
     pub(crate) bitmap: NonNull<llama_cpp_sys_2::mtmd_bitmap>,
 }
 
+// MtmdBitmap is thread safe
+unsafe impl Send for MtmdBitmap {}
+unsafe impl Sync for MtmdBitmap {}
+
 impl MtmdBitmap {
     /// Create a bitmap from image data in RGB format.
     ///
@@ -424,6 +457,9 @@ impl MtmdBitmap {
     ///
     /// * `ctx` - MTMD context for processing
     /// * `path` - Path to the image or audio file
+    /// * `placeholder` - If `true`, build a data-less bitmap (dimensions/length only, with no
+    ///   decoded pixels or audio samples) — useful for counting tokens without loading the media.
+    ///   If `false`, decode and load the actual data.
     ///
     /// # Returns
     ///
@@ -435,12 +471,17 @@ impl MtmdBitmap {
     /// * `NullResult` - File could not be loaded or processed
     ///
     /// This function is thread-safe.
-    pub fn from_file(ctx: &MtmdContext, path: &str) -> Result<Self, MtmdBitmapError> {
+    pub fn from_file(
+        ctx: &MtmdContext,
+        path: &str,
+        placeholder: bool,
+    ) -> Result<Self, MtmdBitmapError> {
         let path_cstr = CString::new(path)?;
         let bitmap = unsafe {
             llama_cpp_sys_2::mtmd_helper_bitmap_init_from_file(
                 ctx.context.as_ptr(),
                 path_cstr.as_ptr(),
+                placeholder,
             )
         };
 
@@ -460,6 +501,9 @@ impl MtmdBitmap {
     ///
     /// * `ctx` - MTMD context for processing
     /// * `data` - Buffer containing the file data
+    /// * `placeholder` - If `true`, build a data-less bitmap (dimensions/length only, with no
+    ///   decoded pixels or audio samples) — useful for counting tokens without loading the media.
+    ///   If `false`, decode and load the actual data.
     ///
     /// # Returns
     ///
@@ -470,12 +514,17 @@ impl MtmdBitmap {
     /// * `NullResult` - Buffer could not be processed
     ///
     /// This function is thread-safe.
-    pub fn from_buffer(ctx: &MtmdContext, data: &[u8]) -> Result<Self, MtmdBitmapError> {
+    pub fn from_buffer(
+        ctx: &MtmdContext,
+        data: &[u8],
+        placeholder: bool,
+    ) -> Result<Self, MtmdBitmapError> {
         let bitmap = unsafe {
             llama_cpp_sys_2::mtmd_helper_bitmap_init_from_buf(
                 ctx.context.as_ptr(),
                 data.as_ptr(),
                 data.len(),
+                placeholder,
             )
         };
 
