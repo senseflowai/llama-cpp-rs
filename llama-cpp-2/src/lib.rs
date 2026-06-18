@@ -16,7 +16,7 @@
 //! - `sampler` adds the [`context::sample::sampler`] struct for a more rusty way of sampling.
 use std::ffi::{c_char, CStr, CString, NulError};
 use std::fmt::Debug;
-use std::num::{NonZeroI32, NonZeroUsize};
+use std::num::NonZeroI32;
 
 use crate::llama_batch::BatchAddError;
 use std::os::raw::c_int;

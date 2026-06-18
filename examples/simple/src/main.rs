@@ -313,6 +313,7 @@ either reduce n_len or increase n_ctx"
 
     ctx.decode(&mut batch)
         .with_context(|| "llama_decode() failed")?;
+
     // main loop
 
     let mut n_cur = batch.n_tokens();

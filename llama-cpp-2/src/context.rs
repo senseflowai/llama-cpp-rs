@@ -1,7 +1,7 @@
 //! Safe wrapper around `llama_context`.
 
 use std::fmt::{Debug, Formatter};
-use std::num::{NonZeroI32, NonZeroUsize};
+use std::num::NonZeroI32;
 use std::ptr::NonNull;
 use std::slice;
 
@@ -68,24 +68,6 @@ impl<'model> LlamaContext<'model> {
     #[must_use]
     pub fn n_ctx(&self) -> u32 {
         unsafe { llama_cpp_sys_2::llama_n_ctx(self.context.as_ptr()) }
-    }
-
-    /// Gets the size of the context.
-    #[must_use]
-    pub fn state_seq_size(&self, i: i32) -> usize {
-        unsafe { llama_cpp_sys_2::llama_state_seq_get_size(self.context.as_ptr(), i) }
-    }
-
-    ///Get mem state
-    pub fn state_seq_get_data(&self, dest: *mut u8, size: usize, i: i32) -> usize {
-        unsafe { llama_cpp_sys_2::llama_state_seq_get_data(self.context.as_ptr(), dest, size, i) }
-    }
-
-    ///Set mem state
-    pub fn state_seq_set_data(&self, src: &[u8], size: usize, i: i32) -> usize {
-        unsafe {
-            llama_cpp_sys_2::llama_state_seq_set_data(self.context.as_ptr(), src.as_ptr(), size, i)
-        }
     }
 
     /// Decodes the batch.
